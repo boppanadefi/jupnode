@@ -1,0 +1,6 @@
+node_modules
+.env
+dist
+# Optionally, other files or folders to exclude
+jupiter-quote-api-node-main/example/
+jupiter-quote-api-node-main/tests/

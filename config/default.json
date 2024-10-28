@@ -1,0 +1,15 @@
+{
+  "min_order_price": 5,
+  "min_wallet_balance": 0.1,
+  "min_sol_in_pool": 2000.00,
+  "max_risk_per_token":150.00,
+  "simulation_retries": 3.00,
+  "simulation_delay": 1000,
+  "transaction_delay": 1000,
+  "quote_api_url": "https://quote-api.jup.ag/v6",
+  "price_api_url": "https://price.jup.ag/v6",
+  "price_mint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  "sol_mint": "So11111111111111111111111111111111111111112",
+  "activate_commission":false,
+  "debug": false 
+}
