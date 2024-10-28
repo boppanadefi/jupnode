@@ -1,7 +1,7 @@
 {
   "min_order_price": 5,
   "min_wallet_balance": 0.1,
-  "min_sol_in_pool": 2000.00,
+  "min_sol_in_pool": 1000.00,
   "max_risk_per_token":150.00,
   "simulation_retries": 3.00,
   "simulation_delay": 1000,
