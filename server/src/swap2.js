@@ -1,211 +1,130 @@
-// const { 
-//     Connection, Keypair, PublicKey, TransactionInstruction, 
-//     TransactionMessage, VersionedTransaction, AddressLookupTableAccount,
-//     ComputeBudgetProgram, LAMPORTS_PER_SOL 
-// } = require('@solana/web3.js');
-// const { TOKEN_PROGRAM_ID, getOrCreateAssociatedTokenAccount, createTransferInstruction } = require('@solana/spl-token');
-// const bs58 = require('bs58');
-// const { fetch } = require('cross-fetch');
+// const { createJupiterApiClient } = require('@jup-ag/api');
 // const { Wallet } = require('@project-serum/anchor');
-// const config = require('../../config/config');
+// const { LAMPORTS_PER_SOL, Keypair, VersionedTransaction } = require('@solana/web3.js');
+// const bs58 = require('bs58');
 // const util = require('./utils');
 
-// class SwapError extends Error {
-//     constructor(message, id) {
-//         super(message);
-//         this.name = "SwapError";
-//         this.id = id;
+// // async function retryOperation(operation, retries = 3, delay = 1000) {
+// //     for (let attempt = 1; attempt <= retries; attempt++) {
+// //         try {
+// //             return await operation();
+// //         } catch (error) {
+// //             if (attempt < retries) {
+// //                 console.warn(`Attempt ${attempt} failed, retrying in ${delay}ms...`);
+// //                 await new Promise((resolve) => setTimeout(resolve, delay));
+// //             } else {
+// //                 throw new Error(`Operation failed after ${retries} attempts: ${error.message}`);
+// //             }
+// //         }
+// //     }
+// // }
+
+// async function retryOperation(operation, retries = 3, delay = 1000, onRetry) {
+//     for (let attempt = 1; attempt <= retries; attempt++) {
+//         try {
+//             return await operation();
+//         } catch (error) {
+//             if (attempt < retries) {
+//                 console.warn(`Attempt ${attempt} failed, retrying in ${delay}ms...`);
+//                 if (onRetry) onRetry(error, attempt);
+//                 await new Promise((resolve) => setTimeout(resolve, delay));
+//             } else {
+//                 throw new Error(`Operation failed after ${retries} attempts: ${error.message}`);
+//             }
+//         }
 //     }
 // }
 
+
 // async function executeSwap(data, config) {
 //     try {
+//         const id = data.id;
+//         util.printMsg(id, "Executing Swap....");
 
-//          let id = data.id;
-//         //util.printJson(id, data);
-       
-//         util.printMsg(id, `Start Executing Swap`);
-//         const connection = new Connection(config.rpcUrl);
+//         const jupiterQuoteApi = createJupiterApiClient(config.rpc_url);
+//         const connection = util.connection;
 
 //         let decoded;
 //         try {
-//             decoded = bs58.decode ? bs58.decode(config.privateKey) : bs58.default.decode(config.privateKey);            
+//             decoded = bs58.decode ? bs58.decode(config.privateKey) : bs58.default.decode(config.privateKey);
 //         } catch (error) {
 //             util.printMsg(id, `Failed to decode private key: ${error.message}`);
 //             throw new SwapError("Private key decoding failed", id);
 //         }
 
 //         const wallet = new Wallet(Keypair.fromSecretKey(decoded));
+//         let amount = data.mode === util.buy
+//             ? data.amount * LAMPORTS_PER_SOL
+//             : Math.round(data.amount * Math.pow(10, data.decimals));
 
-//         util.printMsg(id, `Fetching Quote for Trade Amount ${data.amount}`);
-//         let amount = data.mode === util.buy ? data.amount * LAMPORTS_PER_SOL : util.bigInt(data.amount * Math.pow(10, data.decimals));
-        
-//         const quoteResponse = await fetch(`${config.quoteApiUrl}/quote?inputMint=${data.inputMint}&outputMint=${data.outputMint}&amount=${amount}&slippageBps=${data.slippage}`).then(res => res.json());
+//         const quoteParms = {
+//             inputMint: data.inputMint,
+//             outputMint: data.outputMint,
+//             amount: Math.round(data.amount * LAMPORTS_PER_SOL),
+//             autoSlippage: true,
+//             autoSlippageCollisionUsdValue: 1_000,
+//             maxAutoSlippageBps: 1000,
+//             minimizeSlippage: true,
+//             onlyDirectRoutes: false,
+//             asLegacyTransaction: false,
+//         };
 
-//         let instructions = await fetchSwapInstructions(id, quoteResponse, wallet, config);
-//         validateInstructionsNotEmpty(instructions, id);
+//         const quote = await jupiterQuoteApi.quoteGet(quoteParms);
+//         if (!quote) throw new Error("Unable to quote");
 
-//         const { tokenLedgerInstruction, computeBudgetInstructions, setupInstructions, swapInstruction: swapInstructionPayload, cleanupInstruction, addressLookupTableAddresses } = instructions;
-        
-//         const addressLookupTableAccounts = await getAddressLookupTableAccounts(id, addressLookupTableAddresses, connection);
-//         const transactionInstructions = [];
+//         const swapObj = await jupiterQuoteApi.swapPost({
+//             swapRequest: {
+//                 quoteResponse: quote,
+//                 userPublicKey: wallet.publicKey.toBase58(),
+//                 dynamicComputeUnitLimit: true,
+//                 prioritizationFeeLamports: "auto",
+//             }
+//         });
+//         if (!swapObj) throw new Error("Unable to swap");
 
-//         if (addressLookupTableAccounts.length > 0) {
-//             addSingleInstruction(transactionInstructions, swapInstructionPayload, 'Swap');
-//             addInstructions(transactionInstructions, computeBudgetInstructions, 'Compute Budget');
-
-//         } else {
-//             // Add unique instructions
-//             addInstructions(transactionInstructions, setupInstructions, 'Setup');
-//             addSingleInstruction(transactionInstructions, swapInstructionPayload, 'Swap');
-//             addSingleInstruction(transactionInstructions, cleanupInstruction, 'Cleanup');
-//             addSingleInstruction(transactionInstructions, tokenLedgerInstruction, 'Token Ledger');
-//             addInstructions(transactionInstructions, computeBudgetInstructions, 'Compute Budget');
-//         }
-
-//         if (config.priorityFeeFlag === data.mode || config.priorityFeeFlag === 'both') {
-//             let fee = await getRecentPrioritizationFees(connection, data.inputMint);
-//             let priorityFeeLamports = util.bigInt(fee * config.maxPriorityFeeFactor / 100);
-
-//             if (priorityFeeLamports <= 0) priorityFeeLamports = 1000;
-
-//             util.printMsg(id, `Priority Fee Applied :${priorityFeeLamports}`);
-         
-//             transactionInstructions.unshift(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFeeLamports }));
-//         }
-
-//         util.printMsg(id, `Fetching Hash, Decoding Transactions`);
-//         const blockhash = (await connection.getLatestBlockhash()).blockhash;
-
-//         const messageV0 = new TransactionMessage({
-//             payerKey: wallet.publicKey,
-//             recentBlockhash: blockhash,
-//             instructions: transactionInstructions,
-//         }).compileToV0Message(addressLookupTableAccounts);
-
-        
-
-//         const transaction = new VersionedTransaction(messageV0);
+//         const swapTransactionBuf = Buffer.from(swapObj.swapTransaction, "base64");
+//         let transaction = VersionedTransaction.deserialize(swapTransactionBuf);
 //         transaction.sign([wallet.payer]);
+//         const signature = util.getSignature(transaction);
 
-      
-//         //console.log(JSON.stringify(transaction,null,2));
-
-//         util.printMsg(id,`Proceeding ${data.mode} swap transaction`);
-//         const result = await executeSwapWithRetries(id, data, connection, transaction, blockhash, config);
-//         return result;
-
-//     } catch (error) {
-//         util.printMsg(data.id, `Error in executeSwap: ${error.message}`);
-//         return error.message;
-//     }
-// }
-
-// function addInstructions(transactionInstructions, instructions, label) {
-//     instructions.forEach(instruction => {
-//         const deserialized = deserializeInstruction(instruction);
-//         if (deserialized) {
-//             transactionInstructions.push(deserialized);
-//         } else {
-//             console.error(`Failed to deserialize ${label} instruction:`, instruction);
-//         }
-//     });
-// }
-
-// function addSingleInstruction(transactionInstructions, instruction, label) {
-//     if (instruction) {
-//         const deserialized = deserializeInstruction(instruction);
-//         if (deserialized) {
-//             transactionInstructions.push(deserialized);
-//         } else {
-//             console.error(`Failed to deserialize ${label} instruction`);
-//         }
-//     }
-// }
-
-// async function fetchSwapInstructions(id, quoteResponse, wallet, config) {
-//     try {
-//         const response = await fetch(`${config.quoteApiUrl}/swap-instructions`, {
-//             method: 'POST',
-//             headers: { 'Content-Type': 'application/json' },
-//             body: JSON.stringify({ quoteResponse, userPublicKey: wallet.payer.publicKey.toBase58() }),
-//         });
-//         const instructions = await response.json();
-//         if (instructions.error) throw new SwapError("Failed to get swap instructions: " + instructions.error, id);
-//         return instructions;
-//     } catch (error) {
-//         util.printMsg(id, `Error fetching swap instructions: ${error.message}`);
-//         throw new SwapError("Error in fetchSwapInstructions: " + error.message, id);
-//     }
-// }
-
-// function deserializeInstruction(instruction) {
-//     try {
-//         return new TransactionInstruction({
-//             programId: new PublicKey(instruction.programId),
-//             keys: instruction.accounts.map(key => ({ pubkey: new PublicKey(key.pubkey), isSigner: key.isSigner, isWritable: key.isWritable })),
-//             data: Buffer.from(instruction.data, "base64"),
-//         });
-//     } catch (error) {
-//         console.error(`Error deserializing instruction: ${error.message}`);
-//         return null;
-//     }
-// }
-
-// async function getAddressLookupTableAccounts(id, keys, connection) {
-//     const addressLookupTableAccountInfos = await connection.getMultipleAccountsInfo(keys.map(key => new PublicKey(key)));
-//     return addressLookupTableAccountInfos.reduce((acc, accountInfo, index) => {
-//         if (accountInfo) {
-//             acc.push(new AddressLookupTableAccount({
-//                 key: new PublicKey(keys[index]),
-//                 state: AddressLookupTableAccount.deserialize(accountInfo.data),
-//             }));
-//         }
-//         return acc;
-//     }, []);
-// }
-
-// function validateInstructionsNotEmpty(instructions, id) {
-//     if (!instructions.setupInstructions?.length || !instructions.swapInstruction?.data || !instructions.cleanupInstruction?.data) {
-//         throw new SwapError("One or more instructions are missing or incomplete.", id);
-//     }
-// }
-
-// async function executeSwapWithRetries(id, data, connection, transaction, blockhash, config) {
-//     let attempts = 0;
-//     const maxAttempts = config.transactionRetries;
-
-//     while (attempts < maxAttempts) {
-//         try {
-//             util.printMsg(id, `Attempt : ${attempts} swap transaction`);
-            
-//             if (data.isTest || config.debug) {
-//                 util.printMsg(id, "TEST/DEBUG mode : No Transaction Sent");
-//                 return "TEST/DEBUG";
+//         // Retry logic for simulating the transaction
+//         await retryOperation(async () => {
+//             const simulatedTransactionResponse = await connection.simulateTransaction(transaction, {
+//                 replaceRecentBlockhash: true,
+//                 commitment: "processed",
+//             });
+//             if (!simulatedTransactionResponse || simulatedTransactionResponse.value.err) {
+//                 throw new Error("Error in SimulationResponse");
 //             }
-//             const signature = await connection.sendTransaction(transaction);
-//             const confirmation = await connection.confirmTransaction({ signature, blockhash }, 'confirmed');
-//             if (confirmation) {
-//                 return `https://solscan.io/tx/${signature}`;
-//             }
-//         } catch (error) {
-//             attempts += 1;
-//             if (attempts >= maxAttempts) throw new SwapError("Transaction failed after maximum retries", id);
-//             await new Promise(resolve => setTimeout(resolve, config.transactionDelay));
-//         }
-//     }
-// }
+//         });
 
-// async function getRecentPrioritizationFees(connection, inputMint) {
-//     try {
-//         const body = { jsonrpc: "2.0", id: 1, method: "getRecentPrioritizationFees", params: [[inputMint]] };
-//         const response = await fetch(connection.rpcEndpoint, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } });
-//         const jsonResponse = await response.json();
-//         const fees = jsonResponse.result?.map(fee => fee.prioritizationFee).filter(fee => fee > 0).sort((a, b) => a - b);
-//         return fees && fees.length ? fees[Math.floor(fees.length / 2)] : 0;
+//         if (config.debug || data.isTest) {
+//             util.printMsg(id, `Simulation ${data.mode.toUpperCase()} Successful, TEST/DEBUG mode. No Transaction Sent`);
+//             return signature;
+//         }
+
+//         const serializedTransaction = Buffer.from(transaction.serialize());
+//         const blockhash = await connection.getLatestBlockhash();
+
+//         // Retry logic for sending and confirming the transaction
+//         await retryOperation(async () => {
+//             const transactionResponse = await util.transactionSenderAndConfirmationWaiter({
+//                 connection,
+//                 serializedTransaction,
+//                 blockhashWithExpiryBlockHeight: {
+//                     blockhash,
+//                     lastValidBlockHeight: swapObj.lastValidBlockHeight,
+//                 },
+//             });
+//             if (!transactionResponse || transactionResponse.meta?.err) {
+//                 throw new Error("Transaction failed or not confirmed");
+//             }
+//         });
+
+//         util.printMsg(id, `Signature: https://solscan.io/tx/${signature}`);
+//         return signature;
 //     } catch (error) {
-//         console.error(`Error fetching prioritization fees: ${error.message}`);
-//         return 0;
+//         console.error('Error executing swap:', error);
 //     }
 // }
 

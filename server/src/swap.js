@@ -4,13 +4,14 @@ const { LAMPORTS_PER_SOL, Keypair, VersionedTransaction } = require('@solana/web
 const bs58 = require('bs58');
 const util = require('./utils');
 
-async function retryOperation(operation, retries = 3, delay = 1000) {
+async function retryOperation(operation, retries = 3, delay = 1000, onRetry) {
     for (let attempt = 1; attempt <= retries; attempt++) {
         try {
             return await operation();
         } catch (error) {
             if (attempt < retries) {
                 console.warn(`Attempt ${attempt} failed, retrying in ${delay}ms...`);
+                if (onRetry) onRetry(error, attempt);
                 await new Promise((resolve) => setTimeout(resolve, delay));
             } else {
                 throw new Error(`Operation failed after ${retries} attempts: ${error.message}`);
@@ -19,33 +20,34 @@ async function retryOperation(operation, retries = 3, delay = 1000) {
     }
 }
 
-async function executeSwap(data, config) {
+function decodePrivateKey(privateKey) {
     try {
-        const id = data.id;
-        util.printMsg(id, "Executing Swap....");
+        return( bs58.decode ? bs58.decode(privateKey) : bs58.default.decode(privateKey));
+    } catch (error) {
+        throw new Error("Private key decoding failed");
+    }
+}
 
+async function executeSwap(data, config) {
+    const id = data.id;
+    util.printMsg(id, "Executing Swap....");
+
+    try {
         const jupiterQuoteApi = createJupiterApiClient(config.rpc_url);
         const connection = util.connection;
+        const decodedKey = decodePrivateKey(config.privateKey);
+        const wallet = new Wallet(Keypair.fromSecretKey(decodedKey));
 
-        let decoded;
-        try {
-            decoded = bs58.decode ? bs58.decode(config.privateKey) : bs58.default.decode(config.privateKey);
-        } catch (error) {
-            util.printMsg(id, `Failed to decode private key: ${error.message}`);
-            throw new SwapError("Private key decoding failed", id);
-        }
-
-        const wallet = new Wallet(Keypair.fromSecretKey(decoded));
-        let amount = data.mode === util.buy
+        const amount = data.mode === util.buy
             ? data.amount * LAMPORTS_PER_SOL
             : Math.round(data.amount * Math.pow(10, data.decimals));
 
         const quoteParms = {
             inputMint: data.inputMint,
             outputMint: data.outputMint,
-            amount: Math.round(data.amount * LAMPORTS_PER_SOL),
+            amount,
             autoSlippage: true,
-            autoSlippageCollisionUsdValue: 1_000,
+            autoSlippageCollisionUsdValue: 1000,
             maxAutoSlippageBps: 1000,
             minimizeSlippage: true,
             onlyDirectRoutes: false,
@@ -70,16 +72,20 @@ async function executeSwap(data, config) {
         transaction.sign([wallet.payer]);
         const signature = util.getSignature(transaction);
 
-        // Retry logic for simulating the transaction
-        await retryOperation(async () => {
-            const simulatedTransactionResponse = await connection.simulateTransaction(transaction, {
-                replaceRecentBlockhash: true,
-                commitment: "processed",
-            });
-            if (!simulatedTransactionResponse || simulatedTransactionResponse.value.err) {
-                throw new Error("Error in SimulationResponse");
-            }
-        });
+        await retryOperation(
+            async () => {
+                const simulatedTransactionResponse = await connection.simulateTransaction(transaction, {
+                    replaceRecentBlockhash: true,
+                    commitment: "processed",
+                });
+                if (!simulatedTransactionResponse || simulatedTransactionResponse.value.err) {
+                    throw new Error("Error in SimulationResponse");
+                }
+            },
+            3, // retries
+            1000, // delay
+            (error, attempt) => util.printMsg(id, `Simulation attempt ${attempt} failed: ${error.message}`)
+        );
 
         if (config.debug || data.isTest) {
             util.printMsg(id, `Simulation ${data.mode.toUpperCase()} Successful, TEST/DEBUG mode. No Transaction Sent`);
@@ -87,25 +93,30 @@ async function executeSwap(data, config) {
         }
 
         const serializedTransaction = Buffer.from(transaction.serialize());
-        const blockhash = await connection.getLatestBlockhash();
+        //const blockhash = await connection.getLatestBlockhash();
 
-        // Retry logic for sending and confirming the transaction
-        await retryOperation(async () => {
-            const transactionResponse = await util.transactionSenderAndConfirmationWaiter({
-                connection,
-                serializedTransaction,
-                blockhashWithExpiryBlockHeight: {
-                    blockhash,
-                    lastValidBlockHeight: swapObj.lastValidBlockHeight,
-                },
-            });
-            if (!transactionResponse || transactionResponse.meta?.err) {
-                throw new Error("Transaction failed or not confirmed");
-            }
-        });
+        await retryOperation(
+            async () => {
+                const transactionResponse = await util.transactionSenderAndConfirmationWaiter({
+                    connection,
+                    serializedTransaction,
+                    blockhashWithExpiryBlockHeight: {
+                        blockhash : await connection.getLatestBlockhash(),
+                        lastValidBlockHeight: swapObj.lastValidBlockHeight,
+                    },
+                });
+                if (!transactionResponse || transactionResponse.meta?.err) {
+                    throw new Error("Transaction failed or not confirmed");
+                }
+            },
+            3,
+            1000,
+            (error, attempt) => util.printMsg(id, `Transaction attempt ${attempt} failed: ${error.message}`)
+        );
 
         util.printMsg(id, `Signature: https://solscan.io/tx/${signature}`);
         return signature;
+
     } catch (error) {
         console.error('Error executing swap:', error);
     }
