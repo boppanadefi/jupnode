@@ -35,6 +35,23 @@ async function processBuyOrder(id, pool, data,  wallet,config) {
             return defaultOrder;
         }
 
+        let walletTokenBalance = await util.getWalletTokenBalance(id, wallet,pool.tokenMint);
+        util.printMsg(id, `Number of Tokens in the Wallet ${walletTokenBalance}`) 
+        util.printMsg(id, `Token Price ${data.price} USD`) 
+        util.printMsg(id, `Max.Risk ${config.maxRiskPerToken} USD`) 
+        
+        
+
+        tokenValue = walletTokenBalance * data.price
+
+        util.printMsg(id, `Value of Available Tokens :  ${tokenValue} USD`);
+
+        if (tokenValue > config.maxRiskPerToken) {
+            util.printMsg(id, `Risk Per Token (${tokenValue.toFixed(2)} USD) is more than Max.Risk Per Token(${config.maxRiskPerToken} USD)  Hence NOT Buying...`);
+
+            return defaultOrder;
+        }
+
         // let isTokenValid = await util.isTokenValid(id, pool.tokenMint, mintSymbol);
         // if (!isTokenValid) {
         //     util.printMsg(id, `Token Mint (${pool.tokenMint}) is not Valid`);

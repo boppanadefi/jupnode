@@ -350,11 +350,103 @@ const SEND_OPTIONS = {
   skipPreflight: true,
 };
 
+// async function transactionSenderAndConfirmationWaiter({
+//   connection,
+//   serializedTransaction,
+//   blockhashWithExpiryBlockHeight,
+// }) {
+//   const txid = await connection.sendRawTransaction(
+//     serializedTransaction,
+//     SEND_OPTIONS
+//   );
+
+//   const controller = new AbortController();
+//   const abortSignal = controller.signal;
+
+//   const abortableResender = async () => {
+//     while (true) {
+//       await wait(2000);
+//       if (abortSignal.aborted) return;
+//       try {
+//         await connection.sendRawTransaction(
+//           serializedTransaction,
+//           SEND_OPTIONS
+//         );
+//       } catch (e) {
+//         console.warn(`Failed to resend transaction: ${e}`);
+//       }
+//     }
+//   };
+
+//   try {
+//     abortableResender();
+//     const lastValidBlockHeight =
+//       blockhashWithExpiryBlockHeight.lastValidBlockHeight - 150;
+
+//     // This might throw TransactionExpiredBlockheightExceededError
+//     await Promise.race([
+//       connection.confirmTransaction(
+//         {
+//           ...blockhashWithExpiryBlockHeight,
+//           lastValidBlockHeight,
+//           signature: txid,
+//           abortSignal,
+//         },
+//         "confirmed"
+//       ),
+//       new Promise(async (resolve) => {
+//         // In case websocket connection dies
+//         while (!abortSignal.aborted) {
+//           await wait(2000);
+//           const tx = await connection.getSignatureStatus(txid, {
+//             searchTransactionHistory: false,
+//           });
+//           if (tx?.value?.confirmationStatus === "confirmed") {
+//             resolve(tx);
+//           }
+//         }
+//       }),
+//     ]);
+//   } catch (e) {
+//     if (e instanceof TransactionExpiredBlockheightExceededError) {
+//       // If expired, getTransaction will return null
+//       return null;
+//     } else {
+//       throw e; // Unexpected error from web3.js
+//     }
+//   } finally {
+//     controller.abort();
+//   }
+
+//   // Retry fetching transaction if RPC isn't synced
+//   const response = await promiseRetry(
+//     async (retry) => {
+//       const response = await connection.getTransaction(txid, {
+//         commitment: "confirmed",
+//         maxSupportedTransactionVersion: 0,
+//       });
+//       if (!response) {
+//         retry(response);
+//       }
+//       return response;
+//     },
+//     {
+//       retries: 5,
+//       minTimeout: 1000,
+//     }
+//   );
+
+//   return response;
+// }
+
 async function transactionSenderAndConfirmationWaiter({
   connection,
   serializedTransaction,
   blockhashWithExpiryBlockHeight,
 }) {
+  const SEND_OPTIONS = { skipPreflight: false, preflightCommitment: 'confirmed' };
+  
+  // Initial transaction send
   const txid = await connection.sendRawTransaction(
     serializedTransaction,
     SEND_OPTIONS
@@ -363,10 +455,10 @@ async function transactionSenderAndConfirmationWaiter({
   const controller = new AbortController();
   const abortSignal = controller.signal;
 
+  // Function to keep resending the transaction in the background
   const abortableResender = async () => {
-    while (true) {
+    while (!abortSignal.aborted) {
       await wait(2000);
-      if (abortSignal.aborted) return;
       try {
         await connection.sendRawTransaction(
           serializedTransaction,
@@ -378,44 +470,48 @@ async function transactionSenderAndConfirmationWaiter({
     }
   };
 
-  try {
-    abortableResender();
-    const lastValidBlockHeight =
-      blockhashWithExpiryBlockHeight.lastValidBlockHeight - 150;
+  const lastValidBlockHeight =
+    blockhashWithExpiryBlockHeight.lastValidBlockHeight - 50;
 
-    // This might throw TransactionExpiredBlockheightExceededError
+  // Start resending in the background
+  const resenderPromise = abortableResender();
+
+  try {
+    // Race between confirmation and the backup polling mechanism
     await Promise.race([
       connection.confirmTransaction(
         {
           ...blockhashWithExpiryBlockHeight,
           lastValidBlockHeight,
           signature: txid,
-          abortSignal,
         },
         "confirmed"
       ),
       new Promise(async (resolve) => {
-        // In case websocket connection dies
+        // Backup confirmation checker in case of WebSocket failure
         while (!abortSignal.aborted) {
           await wait(2000);
-          const tx = await connection.getSignatureStatus(txid, {
-            searchTransactionHistory: false,
+          const txStatus = await connection.getSignatureStatus(txid, {
+            searchTransactionHistory: true,
           });
-          if (tx?.value?.confirmationStatus === "confirmed") {
-            resolve(tx);
+          if (txStatus?.value?.confirmationStatus === "confirmed") {
+            resolve(txStatus);
           }
         }
       }),
     ]);
   } catch (e) {
     if (e instanceof TransactionExpiredBlockheightExceededError) {
-      // If expired, getTransaction will return null
+      // Transaction expired
       return null;
     } else {
-      throw e; // Unexpected error from web3.js
+      console.error("Unexpected error:", e);
+      throw e;
     }
   } finally {
+    // Stop the resender loop
     controller.abort();
+    await resenderPromise; // Ensure the resender has stopped completely
   }
 
   // Retry fetching transaction if RPC isn't synced
@@ -426,7 +522,7 @@ async function transactionSenderAndConfirmationWaiter({
         maxSupportedTransactionVersion: 0,
       });
       if (!response) {
-        retry(response);
+        retry(new Error("Transaction fetch retry"));
       }
       return response;
     },
@@ -438,7 +534,6 @@ async function transactionSenderAndConfirmationWaiter({
 
   return response;
 }
-
 
 
 

@@ -23,6 +23,8 @@ async function processWebhookData(whdata) {
     util.printMsg(id, `Payload: Amount: ${amount}`);
     util.printMsg(id, `Payload: Slippage: ${webhookData.slippage_bps}`);
     util.printMsg(id, `Payload: Pair: ${webhookData.pair_id}`);
+    util.printMsg(id, `Payload: Price: ${webhookData.price}`);
+    
     util.printMsg(id, `Payload: Dex: ${webhookData.dex}`);
     util.printMsg(id, `Payload: Test: ${webhookData.is_test}`);
 

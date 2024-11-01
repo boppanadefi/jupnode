@@ -62,7 +62,8 @@ async function executeSwap(data, config) {
                 quoteResponse: quote,
                 userPublicKey: wallet.publicKey.toBase58(),
                 dynamicComputeUnitLimit: true,
-                prioritizationFeeLamports: "auto",
+                asLegacyTransaction:false,
+                prioritizationFeeLamports: "auto" ,
             }
         });
         if (!swapObj) throw new Error("Unable to swap");

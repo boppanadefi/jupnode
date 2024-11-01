@@ -12,8 +12,13 @@ async function processSellOrder(id, pool, data, tokenBalance, wallet, config) {
         }
 
         let tokenForSale = tokenBalance * data.amount / 100;
+
+        let tokenSellValue = tokenForSale * data.price
        
-        
+        if (tokenSellValue < config.minOrderPrice) { 
+            util.printMsg(id, `Order Price (${tokenSellValue.toFixed(2)} USD) is too low. Minimum order price is ${config.minOrderPrice} USD `);
+            return defaultOrder;
+        }
         
         let order = modal.defaultOrder();
         order.mode = util.sell;
